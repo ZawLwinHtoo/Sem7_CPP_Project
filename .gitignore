@@ -1,0 +1,6 @@
+build/
+arcade-users.txt
+arcade-users.txt.*
+*.obj
+*.pdb
+*.ilk

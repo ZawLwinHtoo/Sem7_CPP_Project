@@ -5,6 +5,8 @@
 #include <ctime>
 #include <cstdlib>
 #include <string>
+#include <limits>
+#include <stdexcept>
 using namespace std;
 
 struct playerInfo
@@ -31,22 +33,20 @@ int Main_Connect_4();
 
 int PlayerDrop( char board[][10], playerInfo activePlayer )
 {
-    int dropChoice;
-    do
-    {
+    while (true) {
+        int dropChoice;
         cout << activePlayer.playerName << "'s Turn ";
         cout << "Please enter a number between 1 and 7: ";
-        cin  >> dropChoice;
-
-        while ( board[1][dropChoice] == 'X' || board[1][dropChoice] == 'O' )
-        {
-            cout << "That row is full, please enter a new row: ";
-            cin  >> dropChoice;
+        if (!(cin >> dropChoice)) {
+            if (cin.eof()) throw runtime_error("Input closed.");
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            continue;
         }
-
-    }while ( dropChoice < 1 || dropChoice > 7 );
-
-    return dropChoice;
+        if (dropChoice >= 1 && dropChoice <= 7 && board[1][dropChoice] != 'X' && board[1][dropChoice] != 'O')
+            return dropChoice;
+        cout << "Choose an available column from 1 to 7.\n";
+    }
 }
 
 void CheckBellow ( char board[][10], playerInfo activePlayer, int dropChoice )
@@ -92,71 +92,20 @@ void DisplayBoard ( char board[][10] )
 }// board display end here
 
 
-int CheckFour ( char board[][10], playerInfo activePlayer )
-{
-    char XO;
-    int win;
-
-    XO = activePlayer.playerID;
-    win = 0;
-
-    for( int i = 8; i >= 1; --i )
-    {
-
-        for( int ix = 9; ix >= 1; --ix )
-        {
-
-            if( board[i][ix] == XO     && //89  if i=4/ix=5  //upper left diagnol
-                board[i-1][ix-1] == XO && //78     34
-                board[i-2][ix-2] == XO &&  //67    23
-                board[i-3][ix-3] == XO )    //56    12
-            {
-                win = 1;
-            }
-            /*
-            r1|123456|
-            r2|123456|
-            r3|123456|
-            r4|123456|
-            r5|123456|
-            r6|123456|
-            */
-            if( board[i][ix] == XO   &&  //89   45
-                board[i][ix-1] == XO &&   //88   44  left
-                board[i][ix-2] == XO &&  //87     43
-                board[i][ix-3] == XO )    //86     42
-            {
-                win = 1;
-            }
-
-            if( board[i][ix] == XO   &&    //45
-                board[i-1][ix] == XO &&   //35  //upper
-                board[i-2][ix] == XO &&   //25
-                board[i-3][ix] == XO )   //15
-            {
-                win = 1;
-            }
-
-            if( board[i][ix] == XO     &&  //45
-                board[i-1][ix+1] == XO &&  //36 //upper right diagonal
-                board[i-2][ix+2] == XO &&  //27
-                board[i-3][ix+3] == XO )  //18
-            {
-                win = 1;
-            }
-
-            if ( board[i][ix] == XO   && //45
-                 board[i][ix+1] == XO &&   //46 right
-                 board[i][ix+2] == XO && //47
-                 board[i][ix+3] == XO ) //48
-            {
-                win = 1;
-            }
+int CheckFour(char board[][10], playerInfo activePlayer) {
+    const int directions[4][2] = {{0,1},{1,0},{1,1},{1,-1}};
+    for(int row=1; row<=6; ++row) for(int column=1; column<=7; ++column) {
+        if(board[row][column] != activePlayer.playerID) continue;
+        for(const auto& direction : directions) {
+            const int lastRow=row+3*direction[0], lastColumn=column+3*direction[1];
+            if(lastRow<1 || lastRow>6 || lastColumn<1 || lastColumn>7) continue;
+            bool match=true;
+            for(int step=1; step<4; ++step)
+                match &= board[row+step*direction[0]][column+step*direction[1]] == activePlayer.playerID;
+            if(match) return 1;
         }
-
     }
-
-    return win;
+    return 0;
 }
 
 int FullBoard( char board[][10] )
@@ -201,23 +150,7 @@ int restart ( char board[][10] )
 }
 //computer
 int PlayerDropwithcom(char board[][10],playerInfo activePlayer){
-    int dropChoice;
-    do
-    {
-        cout << activePlayer.playerName << "'s Turn ";
-        cout << "Please enter a number between 1 and 7: ";
-        cin  >> dropChoice;
-
-        while ( board[1][dropChoice] == 'X' || board[1][dropChoice] == 'O' )
-        {
-            cout << "That row is full, please enter a new row: ";
-            cin  >> dropChoice;
-        }
-
-    }while ( dropChoice < 1 || dropChoice > 7 );
-
-    return dropChoice;
-
+    return PlayerDrop(board, activePlayer);
 }
 int compdrop(char board[][10], playerInfo activePlayer){
     int dropChoice;
@@ -242,7 +175,7 @@ int Main_Connect_4(){
     cout << "*************************************"<< endl;
     cout << "Let's Play Connect 4" << endl ;
     cout << "*************************************"<< endl <<endl;
-    char board[9][10];
+    char board[9][10] = {};
     DisplayBoard(board);
     cout << endl;
 
@@ -315,7 +248,7 @@ int Main_Connect_4(){
 //choice 1 end here
         else if(choice == 2){
             playerInfo playerOne, playerTwo;
-            char board[9][10];
+            char board[9][10]{};
             int trueWidth = 7;
             int trueLength = 6;
             int dropChoice, win, full, again;

@@ -8,8 +8,7 @@ using namespace std;
 
 int main(){
     load_data_from_file();
-    print_all_data();
-    cout<<"Current User :"<<user<<endl;
+    cout << "Loaded " << user << " local player profiles.\n";
     welcome();
     return 0;
 }

@@ -1,6 +1,7 @@
 #include <iostream>
 #include <ctime>
 #include <cstdlib>
+#include <limits>
 using namespace std;
 
 int mark_tic_tac_toe = 0;
@@ -29,19 +30,23 @@ void drawBoard(char *space){
     cout << endl;
 }
 
-void playerMove(char *space, char player){
-    int number;
-    do{
-        cout << "Enter a number (1-9) : ";
-        cin  >> number;
-        number--;
-        if(space[number] == ' '){
-            space[number] = player;
-            break;
+void tic_tac_toe_move(char *space, char player) {
+    while (true) {
+        cout << "Player " << player << ", enter a free square (1-9): ";
+        int number;
+        if (!(cin >> number)) {
+            if (cin.eof()) return;
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            continue;
         }
-    }while( !number > 0 || !number < 8);
-
+        if (number >= 1 && number <= 9 && space[number - 1] == ' ') {
+            space[number - 1] = player;
+            return;
+        }
+    }
 }
+void playerMove(char *space, char player) { tic_tac_toe_move(space, player); }
 // For Computer
 void comMove(char *space, char com){
     int number;
@@ -71,7 +76,7 @@ bool checkmate(char *space, char player, char oppo){
     else if ((space[0] != ' ')&&(space[0]==space[4] && space[4]==space[8])){
         space[0] == player ? ( mark_tic_tac_toe =1,cout << "You Win! \n")  : cout << "You Lose! \n";}
     else if ((space[2] != ' ')&&(space[2]==space[4] && space[4]==space[6])){
-        space[1] == player ? ( mark_tic_tac_toe =1,cout << "You Win! \n")  : cout << "You Lose! \n";}
+        space[2] == player ? ( mark_tic_tac_toe =1,cout << "You Win! \n")  : cout << "You Lose! \n";}
     else {
         return false;
     }
@@ -87,30 +92,10 @@ bool checktie(char *space){
 
 // For OPPO
 void playerMovewithoppo(char *space, char player){
-    int number;
-    do{
-        cout << "Enter a number (1-9) Player 1: ";
-        cin  >> number;
-        number--;
-        if(space[number] == ' '){
-            space[number] = player;
-            break;
-        }
-    }while( !number > 0 || !number < 8);
-
+    tic_tac_toe_move(space, player);
 }
 void oppoMove(char *space, char oppo){
-    int number;
-    do{
-        cout << "Enter a number (1-9) Player 2: ";
-        cin  >> number;
-        number--;
-        if(space[number] == ' '){
-            space[number] = oppo;
-            break;
-        }
-    }while( !number > 0 || !number < 8);
-
+    tic_tac_toe_move(space, oppo);
 };
 
 
@@ -150,7 +135,7 @@ bool checkmatewithOppo(char *space, char player, char com) {
 
 
 int Main_Tic_Tac_Toe(){
-    int modeChoice;
+    int modeChoice = 0;
     cout << "*******************************************" << endl;
     cout << "****************TIC-TAC-TOE!***************" << endl;
     cout << "*******************************************" << endl;
@@ -162,7 +147,11 @@ int Main_Tic_Tac_Toe(){
         cout << "1.Play with a  Friend"<<endl;
         cout << "2.Play with Computer" << endl;
         cout << "3.To quit Tic-Tac-Toe!" << endl;
-        cin >> modeChoice;
+        if (!(cin >> modeChoice)) {
+            if(cin.eof()) return 0;
+            cin.clear(); cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            continue;
+        }
 
 
         if (modeChoice == 1){
@@ -175,6 +164,7 @@ int Main_Tic_Tac_Toe(){
             drawBoard(space);
             while (running){
                 playerMovewithoppo(space, player);
+                if (!cin) return 0;
                 drawBoard(space);
                 if (checkmatewithOppo(space, player, oppo)){
                     running = false;
@@ -186,6 +176,7 @@ int Main_Tic_Tac_Toe(){
                 }
 
                 oppoMove(space, oppo);
+                if (!cin) return 0;
                 drawBoard(space);
 
                 if (checkmatewithOppo(space, player, oppo)){
@@ -210,6 +201,7 @@ int Main_Tic_Tac_Toe(){
 
             while (running){
                 playerMove(space, player);
+                if (!cin) return 0;
                 drawBoard(space);
                 if (checkmate(space, player, com)){
                     running = false;
@@ -240,7 +232,7 @@ int Main_Tic_Tac_Toe(){
         } else {
             cout << "\nInvalid Choice!" << endl;
         }
-    }while ( modeChoice >= 1 || modeChoice <= 3) ;
+    }while (cin) ;
 
     //cout << "Thanks for playing. \n";
 
