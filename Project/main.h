@@ -1,10 +1,19 @@
-#define SS 50
+#pragma once
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
-#include "string"
-#include "cstring"
-#include "fstream"
-#include "sstream"
-#include "vector"
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 #include "SNAKE/main_for_snake.h"
 #include "CONNECT_4/main_for_connect_4.h"
 #include "Tic_Tac_Toe/main_for_tic_tac_toe.h"
@@ -12,324 +21,195 @@
 #include "HANG_MAN/main_for_hangman.h"
 using namespace std;
 
-
-struct data{
-    int id;
-    string name;
-    string email;
-    string password;
+constexpr int SS = 50;
+struct PlayerData {
+    int id = 0;
+    string name, email, password;
     int score_point = 0;
 };
+PlayerData db[SS];
+int user = 0, user_index = -1;
 
-struct data db[SS];
+string hex_bytes(const unsigned char* bytes, size_t size) {
+    ostringstream result;
+    for (size_t i = 0; i < size; ++i) result << hex << setw(2) << setfill('0') << unsigned(bytes[i]);
+    return result.str();
+}
 
-//Function Declaration
-void welcome();
-void registration();
-int gmail_validation(string to_Valid);
-int strong_pass_check(string pass);
-void log_in();
-void user_sector();
-void record_data_to_file();
-void load_data_from_file();
-void print_all_data();
-//Global Variables
-int user = 0;
-int user_index;
+string derive_password(const string& password, const vector<unsigned char>& salt) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, BCRYPT_ALG_HANDLE_HMAC_FLAG) < 0)
+        throw runtime_error("Password hashing is unavailable.");
+    unsigned char derived[32];
+    const auto status = BCryptDeriveKeyPBKDF2(algorithm,
+        reinterpret_cast<PUCHAR>(const_cast<char*>(password.data())), static_cast<ULONG>(password.size()),
+        const_cast<PUCHAR>(salt.data()), static_cast<ULONG>(salt.size()), 600000, derived, sizeof(derived), 0);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (status < 0) throw runtime_error("Password hashing failed.");
+    return hex_bytes(derived, sizeof(derived));
+}
 
-void welcome(){
-    int option;
-    cout<<"Welcome to our program!!\n";
-    cout<<"Press 1 to Register:\nPress 2 to Log in:\nPress 3 to Exit:";
-    cin>>option;
+string hash_password(const string& password) {
+    vector<unsigned char> salt(16);
+    if (BCryptGenRandom(nullptr, salt.data(), static_cast<ULONG>(salt.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+        throw runtime_error("Secure random generation failed.");
+    return "pbkdf2-sha256$" + hex_bytes(salt.data(), salt.size()) + "$" + derive_password(password, salt);
+}
 
-    if (option == 1 ){
-        registration();
-    } else if (option == 2 ){
-        log_in();
-    } else if(option == 3 ){
-        ::exit(1);
-    } else {
-        cout<<"Enter only in the given range!";
-        welcome();
+bool password_matches(const string& supplied, const string& stored) {
+    const string prefix = "pbkdf2-sha256$";
+    if (stored.rfind(prefix, 0) != 0) return supplied == stored; // Migrated to a hash after successful legacy login.
+    const auto separator = stored.find('$', prefix.size());
+    if (separator != prefix.size() + 32 || stored.size() != separator + 65) return false;
+    vector<unsigned char> salt;
+    for (size_t i = prefix.size(); i < separator; i += 2) {
+        const string pair = stored.substr(i, 2);
+        if (!all_of(pair.begin(), pair.end(), [](unsigned char c) { return isxdigit(c); })) return false;
+        salt.push_back(static_cast<unsigned char>(stoul(pair, nullptr, 16)));
+    }
+    const string actual = derive_password(supplied, salt), expected = stored.substr(separator + 1);
+    volatile unsigned char difference = 0;
+    for (size_t i = 0; i < actual.size(); ++i) difference = difference | (actual[i] ^ expected[i]);
+    return difference == 0;
+}
+
+filesystem::path data_path() {
+    const char* configured = getenv("ARCADE_DATA_FILE");
+    return configured && *configured ? filesystem::path(configured) : filesystem::path("arcade-users.txt");
+}
+
+bool record_data_to_file() {
+    const auto path = data_path();
+    if (path.has_parent_path()) filesystem::create_directories(path.parent_path());
+    ofstream file(path, ios::trunc);
+    for (int i = 0; i < user; ++i)
+        file << db[i].id << ' ' << quoted(db[i].name) << ' ' << quoted(db[i].email) << ' '
+             << quoted(db[i].password) << ' ' << db[i].score_point << '\n';
+    file.flush();
+    if (!file) { cerr << "Could not save local profiles. Check the data file permissions.\n"; return false; }
+    return true;
+}
+
+void load_data_from_file() {
+    user = 0;
+    ifstream file(data_path());
+    string line;
+    while (user < SS && getline(file, line)) {
+        PlayerData entry;
+        istringstream row(line);
+        if (!(row >> entry.id >> quoted(entry.name) >> quoted(entry.email) >> quoted(entry.password) >> entry.score_point)
+            || entry.email.find('@') == string::npos) {
+            // Older records used an unquoted, possibly multi-word name.
+            istringstream legacy(line);
+            vector<string> fields;
+            for (string field; legacy >> field;) fields.push_back(field);
+            if (fields.size() < 5) continue;
+            try {
+                entry = PlayerData{};
+                entry.id = stoi(fields.front());
+                entry.score_point = stoi(fields.back());
+                entry.email = fields[fields.size() - 3];
+                entry.password = fields[fields.size() - 2];
+                for (size_t i = 1; i + 3 < fields.size(); ++i) entry.name += (i == 1 ? "" : " ") + fields[i];
+            } catch (const exception&) { continue; }
+        }
+        if (entry.id > 0 && !entry.name.empty() && entry.email.find('@') != string::npos && entry.score_point >= 0)
+            db[user++] = entry;
     }
 }
 
-
-void registration(){
-//    char r_email[50];
-    string r_email;
-    string r_name;
-    string r_pw;
-    int email_exit = -1;
-    int strong_pass = -1;
-
-    cout<<"Enter your email :";
-//    cin.getline(r_email,50);
-//    cin>>r_email;
-//    cin.ignore();
-    getline(cin>>ws,r_email);
-
-    email_exit = gmail_validation(r_email);
-    if (email_exit != -1){
-        cout<<"Email registration succeed.\n";
-        cout<<"Enter your user_name :";
-//        cin.ignore();
-        getline(cin>>ws,r_name);
-//            cin>>r_name;
-        cout<<"Enter your password : (Password must contain at least 8 letter, one capital, one small, one special character and one number!!)";
-//        cin.ignore();
-        getline(cin>>ws,r_pw);
-//            cin>>r_pw;
-        strong_pass = strong_pass_check(r_pw);
-        if (strong_pass != -1){
-            cout<<"Registration Succeed!";
-            db[user].id = user+1;
-            db[user].name = r_name;
-            db[user].password = r_pw;
-            db[user].email = r_email;
-            user++;
-            record_data_to_file();
-            welcome();
-        } else {
-            cout<<"Password is too weak!!! Try again:\n";
-            registration();
-        }
-    } else {
-        cout<<"Email format invalid. Try again!!!\n";
-        registration();
-    }
-
-
+int gmail_validation(string email) {
+    const auto at = email.find('@');
+    return email.size() <= 254 && at != string::npos && at > 0 && email.find('@', at + 1) == string::npos
+        && email.find('.', at + 2) != string::npos && email.back() != '.'
+        && none_of(email.begin(), email.end(), [](unsigned char c) { return isspace(c); }) ? 1 : -1;
 }
 
-void log_in(){
-    user_index = 0;
-    string l_name;
-    string l_email;
-    string l_pw;
-
-    cout<<"This is login sector."<<endl;
-    cout<<"Enter your user name :";
-    cin.ignore();
-    getline(cin,l_name);
-    cout<<"Enter your email:";
-//    cin.ignore();
-    getline(cin,l_email);
-    cout<<"Enter your password :";
-//    cin.ignore();
-    getline(cin,l_pw);
-     for (int i=0; i<user; i++){
-         if ( l_name == db[i].name && l_email == db[i].email && l_pw == db[i].password){
-             user_index = i;
-             cout<<"\nLog in succeed!";
-             cout<<"Welcome "<<l_name<<" !!!\n";
-             user_sector();
-         }
-     }
-     cout<<"Log in failed!!!! Please try again!!\n\n\n"<<endl;
-     welcome();
-   //user_sector();
+int strong_pass_check(string password) {
+    bool lower = false, upper = false, digit = false, special = false;
+    if (password.size() < 8 || password.size() > 128) return -1;
+    for (unsigned char c : password) {
+        lower |= bool(islower(c)); upper |= bool(isupper(c)); digit |= bool(isdigit(c)); special |= bool(ispunct(c));
+    }
+    return lower && upper && digit && special ? 1 : -1;
 }
 
-void user_sector(){
-    int option;
-
-    cout << "\n**********************" << endl;
-    cout << "**********************" << endl;
-    cout << "*****ARCADE GAME******" << endl;
-    cout << "**********************" << endl;
-    cout << "**********************" << endl <<endl;
-
-    cout << "***************" << endl;
-    cout << "Welcome Gamers!" << endl;
-    cout << "Here in the \"ARCADE GAME\" we have plenty of games to play" << endl <<endl;
-
-    do {
-        cout << "***************" << endl;
-        cout << "Available Games:" <<endl << endl;
-        cout << "1.Hangman Game"<<endl;
-        cout << "2.Tic-Tac-Toe"<<endl;
-        cout << "3.Tetris Game"<<endl;
-        cout << "4.Snake Game"<<endl;
-        cout << "5.Connect-4 Game"<<endl <<endl;
-        cout << "***************" << endl;
-
-        cout << "Choose a game(1-5): ";
-        cin>>option;
-        if (option ==1 ){
-            system("cls");
-            Main_hang_man();
-            db[user_index].score_point += mark_hang_man;
-            record_data_to_file();
-            user_sector();
-        } else if (option ==2){
-            system("cls");
-            Main_Tic_Tac_Toe();
-            db[user_index].score_point += mark_tic_tac_toe;
-            record_data_to_file();
-            user_sector();
-        } else if (option == 3){
-            system("cls");
-            Main_tetris();
-            user_sector();
-        } else if (option == 4){
-            system("cls");
-            cout<<"fffff"<<endl;
-            Main_Snake();
-            user_sector();
-        } else if (option == 5){
-            system("cls");
-            Main_Connect_4();
-            db[user_index].score_point+=mark_connect_4;
-            record_data_to_file();
-            user_sector();
-        } else {
-            cout<<"\n\n*******Invalid option!*******!!"<<endl;
-            cout<<"**********Please choose within the given options*******\n"<<endl;
-        }
-
-        cout << endl << endl;
-
-    } while (true);
-
-
-
-}
-
-
-int gmail_validation(string to_Valid){
-    int flag;
-    string to_check;
-    string Available[3] = {"@gmail.com","@yahoo.com","@email.com"};
-    for (int i=0; i<to_Valid.length(); i++){
-        if (to_Valid[i] == ' '){
-            return -1;
-        }
-
-        if ( to_Valid[i] == '@'){
-            flag = i;
-            break;
-        }
-
-    }
-
-    for (int i = flag; i<to_Valid.length(); i++){
-        to_check+=to_Valid[i];
-    }
-
-    for (int i=0 ;i<3; i++){
-        if (to_check == Available[i]){
-            return 1;
-        }
+int read_option(int minimum, int maximum) {
+    string line;
+    while (getline(cin >> ws, line)) {
+        istringstream input(line);
+        int value; char extra;
+        if ((input >> value) && !(input >> extra) && value >= minimum && value <= maximum) return value;
+        cout << "Enter a number from " << minimum << " to " << maximum << ": ";
     }
     return -1;
 }
 
-int strong_pass_check(string pass){
-
-    int i=0;
-    int specialChar = 0;
-    int smallChar = 0;
-    int capChar = 0;
-    int numChar = 0;
-    if (pass.length() < 8){
-        return -1;
-    }
-
-    while (true){
-
-        if ( i == pass.length()){
-            break;
-        }
-        if ( pass[i] >=33 && pass[i] <=42){
-
-            specialChar++;
-        } else if ( pass[i] >= 48 && pass[i] <= 57){
-
-            numChar++;
-        } else if ( pass[i] >= 64 && pass[i] <= 90){
-
-            capChar++;
-        } else if (pass[i] >= 97 && pass[i] <= 122) {
-
-            smallChar++;
-        }
-
-
-        i++;
-
-
-    }
-    if (specialChar >0 && numChar >0 && capChar > 0 && smallChar > 0){
-        return 1;
-    } else{
-        return -1;
-    }
-
-}
-
-void record_data_to_file(){
-    string file_Path ="D:\Project\Projectdb.txt";
-
-    ofstream file(file_Path);
-    for (int i=0; i<user; i++){
-        file << db[i].id << " " << db[i].name << " " << db[i].email <<" " << db[i].password << " " << db[i].score_point << endl;
-    }
-
-    file.close();
-}
-
-void load_data_from_file(){
-    string file_Path = "D:\Project\Projectdb.txt";
-    string temp;
-    string  name, email, password;
-    int id;
-    ifstream file(file_Path);
-    if (file.is_open()){
-        while (!file.eof()){
-            getline(file,temp);
-            if (temp.empty()){
-                break;
-            }
-            istringstream iss(temp);
-            vector <string> array_for_pass_and_email;
-            for (string s;iss>>s;){
-                array_for_pass_and_email.push_back(s);
-            }
-            for (int i=1; i<array_for_pass_and_email.size()-3;i++){
-                if ( i!= array_for_pass_and_email.size()-4){
-                    db[user].name+=array_for_pass_and_email[i] + " ";
-                } else{
-                    db[user].name += array_for_pass_and_email[i];
-                }
-
-
-            }
-
-            db[user].id = stoi(array_for_pass_and_email[0]);
-            db[user].email = array_for_pass_and_email[array_for_pass_and_email.size()-3];
-            db[user].password = array_for_pass_and_email[array_for_pass_and_email.size()-2];
-            db[user].score_point = stoi(array_for_pass_and_email[array_for_pass_and_email.size()-1]);
-//        file >>db[user].id >> db[user].name >> db[user].email >> db[user].password ;
-//      cout<<db[user].name<< "\n" << db[user].email<<"\n"<< db[user].password<<endl;
-            user++;
-        }
-
-        user;
-
-        file.close();
-    } else{
-        cout<<"Error Opening File!!";
-    };
-
-
-}
-
-
 void print_all_data() {
+    for (int i = 0; i < user; ++i) cout << db[i].name << " — " << db[i].score_point << " points\n";
+}
 
-    for (int i = 0; i < user; i++) {
-        cout << db[i].id << " " << db[i].name<< " " << db[i].email << " " << db[i].password << " " << db[i].score_point << endl;
+void user_sector() {
+    while (true) {
+        cout << "\nARCADE — " << db[user_index].name << "\n"
+             << "1. Hangman\n2. Tic-Tac-Toe\n3. Tetris\n4. Snake\n5. Connect 4\n6. Scores\n0. Log out\nChoose: ";
+        int option = read_option(0, 6);
+        if (option < 0 || option == 0) return;
+        switch (option) {
+        case 1: mark_hang_man = 0; Main_hang_man(); db[user_index].score_point += mark_hang_man; break;
+        case 2: mark_tic_tac_toe = 0; Main_Tic_Tac_Toe(); db[user_index].score_point += mark_tic_tac_toe; break;
+        case 3: Main_tetris(); break;
+        case 4: Main_Snake(); break;
+        case 5: mark_connect_4 = 0; Main_Connect_4(); db[user_index].score_point += mark_connect_4; break;
+        case 6: print_all_data(); break;
+        }
+        record_data_to_file();
+        if (!cin) return;
+    }
+}
+
+void registration() {
+    if (user >= SS) { cout << "This local profile store is full.\n"; return; }
+    string email, name, password;
+    cout << "Email: "; if (!getline(cin >> ws, email)) return;
+    if (gmail_validation(email) != 1) { cout << "Invalid email address.\n"; return; }
+    for (int i = 0; i < user; ++i) if (db[i].email == email) { cout << "This email already has a profile.\n"; return; }
+    cout << "Player name: "; if (!getline(cin, name)) return;
+    if (name.empty() || name.size() > 80) { cout << "Use a name of 1 to 80 characters.\n"; return; }
+    cout << "Password (8+ characters, upper/lower case, number and symbol): "; if (!getline(cin, password)) return;
+    if (strong_pass_check(password) != 1) { cout << "Password does not meet the requirements.\n"; return; }
+    int id = 1;
+    for (int i = 0; i < user; ++i) id = max(id, db[i].id + 1);
+    db[user++] = {id, name, email, hash_password(password), 0};
+    if (record_data_to_file()) cout << "Registration saved. You can now log in.\n";
+}
+
+void log_in() {
+    string name, email, password;
+    cout << "Player name: "; if (!getline(cin >> ws, name)) return;
+    cout << "Email: "; if (!getline(cin, email)) return;
+    cout << "Password: "; if (!getline(cin, password)) return;
+    for (int i = 0; i < user; ++i) {
+        if (db[i].name == name && db[i].email == email && password_matches(password, db[i].password)) {
+            user_index = i;
+            if (db[i].password.rfind("pbkdf2-sha256$", 0) != 0) {
+                db[i].password = hash_password(password); record_data_to_file();
+            }
+            cout << "Welcome " << db[i].name << "!\n";
+            user_sector();
+            return;
+        }
+    }
+    cout << "Login failed. Check your player name, email and password.\n";
+}
+
+void welcome() {
+    while (cin) {
+        cout << "\nWelcome to the local arcade.\n1. Register\n2. Log in\n3. Exit\nChoose: ";
+        int choice = read_option(1, 3);
+        if (choice < 0 || choice == 3) return;
+        try {
+            if (choice == 1) registration(); else log_in();
+        } catch (const exception& error) { cerr << error.what() << '\n'; }
     }
 }

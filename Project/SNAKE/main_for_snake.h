@@ -192,7 +192,7 @@ int Main_Snake(){
         snake.move_snake();
         if (snake.eaten(food.current_food_pos())) {
             flag_for_food = true;
-            Snake_Speed -= 10;
+            if (Snake_Speed > 30) Snake_Speed -= 10;
             food_pos = food.get_food_pos();
             snake.snake_grow();
         }
